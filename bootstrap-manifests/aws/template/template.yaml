@@ -1,0 +1,205 @@
+Parameters:
+  FunctionNameBase:
+    Type: String
+    Description: Function name base. The template will add region as suffix to it.
+    Default: divvy-up-backend
+Resources:
+
+### Lambda Related ###
+
+  DivvyUpBackend:
+    Type: AWS::Lambda::Function
+    DependsOn: DivvyUpBackendExecutionerRolePolicies
+    Properties:
+      FunctionName: !Sub ${FunctionNameBase}-${AWS::Region}
+      Runtime: python3.6
+      Code: ../code/divvy_up_backend/.
+      Handler: divvy_up_backend.lambda_handler
+      Role: !GetAtt DivvyUpBackendExecutionerRole.Arn
+      Timeout: 300
+#      Environment:
+#        Variables:
+#          STACK_NAME: !Ref AWS::StackName
+
+  DivvyUpBackendExecutionerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  DivvyUpBackendExecutionerRolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: divvy-up-backend-policies
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource:
+              !Sub |-
+                arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+          -
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              !Sub |-
+                arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FunctionNameBase}-${AWS::Region}:*
+      Roles:
+        -
+          !Ref DivvyUpBackendExecutionerRole
+
+### API Gateway Related ###
+
+  DivvyUpBackendAPIGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCWLogsRole.Arn
+
+  DivvyUpBackendLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DivvyUpBackend
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub  "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${DivvyUpBackendAPI}/*"
+      
+  ApiGatewayCWLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - apigateway.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: ApiGatewayLogsPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:DescribeLogGroups
+            - logs:DescribeLogStreams
+            - logs:PutLogEvents
+            - logs:GetLogEvents
+            - logs:FilterLogEvents
+            Resource: "*"
+            
+  DivvyUpBackendAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: divvy-up backend API
+      Description: Divvy-up backend API for managing signed URLs
+      FailOnWarnings: true
+      
+  DivvyUpBackendAPIResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId:
+        Ref: DivvyUpBackendAPI
+      ParentId: !GetAtt DivvyUpBackendAPI.RootResourceId
+      PathPart: upload
+
+  DivvyDownBackendAPIResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId:
+        Ref: DivvyUpBackendAPI
+      ParentId: !GetAtt DivvyUpBackendAPI.RootResourceId
+      PathPart: download
+
+  DivvyUpBackendAPIDeployment6:
+    DependsOn: DivvyUpBackendAPIMethod
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId:
+        Ref: DivvyUpBackendAPI
+        
+  DivvyUpBackendAPIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref DivvyUpBackendAPIDeployment6
+      MethodSettings:
+      - DataTraceEnabled: true
+        HttpMethod: "*"
+        LoggingLevel: INFO
+        ResourcePath: "/*"
+      RestApiId:
+        Ref: DivvyUpBackendAPI
+      StageName: live
+
+  DivvyUpBackendApiModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref 'DivvyUpBackendAPI'
+      ContentType: 'application/json'
+      Description: 'Schema for DivvyUpBackend API'
+      Schema: |
+        {
+          "$schema": "http://json-schema.org/draft-04/schema#",
+          "additionalProperties": false,
+          "definitions": {},
+          "id": "http://vwgenerateurl.com/example.json",
+          "properties": {
+              "signedURL": {
+                  "id": "/properties/signedURL",
+                  "type": "string"
+              }
+          },
+          "required": [
+              "signedURL"
+          ],
+          "type": "object"
+        }
+
+  DivvyUpBackendAPIMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DivvyUpBackendAPI
+      ResourceId: !Ref DivvyUpBackendAPIResource
+      AuthorizationType: AWS_IAM
+      ApiKeyRequired: false
+      HttpMethod: POST
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DivvyUpBackend.Arn}/invocations"
+
+  DivvyDownBackendAPIMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DivvyUpBackendAPI
+      ResourceId: !Ref DivvyDownBackendAPIResource
+      AuthorizationType: AWS_IAM
+      ApiKeyRequired: false
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DivvyUpBackend.Arn}/invocations"
+
+Outputs:
+  APIRootURI:
+    Description: The root URI of the API gateway
+    Value:
+      Fn::Sub: "https://${DivvyUpBackendAPI}.execute-api.${AWS::Region}.amazonaws.com"

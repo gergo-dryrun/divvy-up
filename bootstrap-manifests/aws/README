@@ -1,0 +1,10 @@
+1. Create lambda backend that does nothing (for now)
+2. Configure API Gateway with IAM Authentication
+3. Test IAM Authentication
+
+Optional:
+1. Make CF template deployed with IAM Role
+2.
+
+export AWS_DEFAULT_PROFILE=gdebreczeni-cliuser
+make BUCKET_NAME="cf-templates-1x7cla4v7r530-eu-west-1" STACK_NAME="divvy-up-backend" deploy
